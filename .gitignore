@@ -2,3 +2,4 @@
 *.zip
 *.fst
 *.csv
+**/.DS_Store
