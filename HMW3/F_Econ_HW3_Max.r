@@ -2,21 +2,21 @@
 library(fst)
 library(highfrequency)
 library(xts)
+library(rugarch)
 
-#load timeframe
+#load timeframe file
+#setwd()
 periods <- read.csv("students_HW3/73267075_periods_HW_3.csv")
 periods
 
 #func to extract periods
 get_period <- function(ticker){
     row <- periods[periods$Ticker==ticker, ]
-    list(start=paste0(row$Start, "-01-01"), #returns start and end
+    list(start=paste0(row$Start, "-01-01"), #add start and end including month-day
         end=paste0(row$End, "-12-31"))
 }
 
-#setwd()
-
-#load stocks
+#load stock files
 BAC <- read_fst("HW_3_data/HW_3_BAC_1min.fst")
 MSFT <- read_fst("HW_3_data/HW_3_MSFT_1min.fst")
 XOM <- read_fst("HW_3_data/HW_3_XOM_1min.fst")
@@ -37,7 +37,7 @@ p_BAC <- get_period("BAC")
 p_MSFT <- get_period("MSFT")
 p_XOM <- get_period("XOM")
 
-BAC_xts <- BAC_xts[paste0(p_BAC$start, "/", p_BAC$end)] #xts subsetting
+BAC_xts <- BAC_xts[paste0(p_BAC$start, "/", p_BAC$end)] #xts subsetting based on dates given
 MSFT_xts <- MSFT_xts[paste0(p_MSFT$start, "/", p_MSFT$end)]
 XOM_xts <- XOM_xts[paste0(p_XOM$start, "/", p_XOM$end)]
 
@@ -51,19 +51,21 @@ XOM_xts <- XOM_xts[format(index(XOM_xts), "%H:%M:%S") >= "07:00:00" &
                    format(index(XOM_xts), "%H:%M:%S") <= "18:00:00"]
 
 
-#plot prices
+#plot prices for overview 
 options(repr.plot.height=8, repr.plot.width=18)
 par(mfrow=c(3,1))
 plot.xts(BAC_xts)
 plot.xts(MSFT_xts)
 plot.xts(XOM_xts)
 
-to.daily(BAC_xts)["2016-11-17/2016-11-28"] #check OHLC around the suspicious period
+#check OHLC around the suspicious period
+to.daily(BAC_xts)["2016-11-17/2016-11-28"] #on daily basis
 
 BAC_xts["2016-11-22"][BAC_xts["2016-11-22"] > 19.9] #check the highest values on that day
 
 plot.xts(BAC_xts["2016-11-18/2016-11-28"]) 
 
+#check the price graph of that day post-anomaly removal
 BAC_xts <- BAC_xts[index(BAC_xts)!=as.POSIXct("2016-11-22 09:05:00", tz="UTC")]
 plot.xts(BAC_xts["2016-11-18/2016-11-28"]) 
 
@@ -72,9 +74,10 @@ summary(BAC_xts)
 summary(MSFT_xts)
 summary(XOM_xts)
 
+#subset price data by day
 BAC_ret <- do.call(rbind, lapply(
     split(BAC_xts, as.Date(index(BAC_xts))), #split on per-day basis
-    function(intraday){diff(log(intraday))}))  #calculate returns within a day
+    function(intraday){diff(log(intraday))}))  #calculate log-returns within each day
 
 MSFT_ret <- do.call(rbind, lapply(
     split(MSFT_xts, as.Date(index(MSFT_xts))),
@@ -91,19 +94,19 @@ XOM_ret <- as.xts(XOM_ret)
 
 head(BAC_ret)
 
-
-par(mfrow=c(3,1)) #log returns for each stock
+#plot log returns for each stock for visual overview
+par(mfrow=c(3,1)) 
 plot.xts(BAC_ret)
 plot.xts(MSFT_ret)
 plot.xts(XOM_ret)
 
 #RV from prices, makeReturns=TRUE -> overnight returns are actually not included
-#rCov computes returns on per.day-basis
+#rCov computes returns on per.day-basis: elaborated on later in the notebook
 BAC_price_RV <- rCov(BAC_xts, makeReturns=TRUE)
 MSFT_price_RV <- rCov(MSFT_xts, makeReturns=TRUE)
 XOM_price_RV <- rCov(XOM_xts, makeReturns=TRUE)
 
-#RV from log returns, makeReturns=FALSE -> overnight returns are excluded
+#RV from log returns, makeReturns=FALSE -> overnight returns are excluded manually
 BAC_ret_RV <- rCov(BAC_ret, makeReturns=FALSE)
 MSFT_ret_RV <- rCov(MSFT_ret, makeReturns=FALSE)
 XOM_ret_RV <- rCov(XOM_ret, makeReturns=FALSE)
@@ -116,13 +119,13 @@ plot.zoo(XOM_price_RV-XOM_ret_RV, main="XOM: Difference in RV computed from pric
 
 #getAnywhere(rCov)
 
-#a function to reduce manual coding
+#make a function to reduce manual coding
 filter_hours <- function(data, start, end){
     data[format(index(data), "%H:%M:%S") >= start &
          format(index(data), "%H:%M:%S") <= end] #keep only the rows where the condition is true (xts)
 }
 
-#BAC: calculate intraday RV
+#BAC: calculate intraday RV (using manually calc. returns)
 BAC_RV1 <- rCov(filter_hours(BAC_ret, "07:00:00", "09:29:00"), makeReturns=FALSE)
 BAC_RV2 <- rCov(filter_hours(BAC_ret, "09:30:00", "10:59:00"), makeReturns=FALSE)
 BAC_RV3 <- rCov(filter_hours(BAC_ret, "11:00:00", "14:29:00"), makeReturns=FALSE)
@@ -174,15 +177,15 @@ legend(x="top", legend=c("7:00-9:29", "9:30-10:59", "11:00-14:29", "14:30-15:59"
     col=c("black", "red", "green", "blue", "lightblue"), lwd=1, bty="n", horiz=TRUE)
 
 #BAC: difference in daily vs sum of intraday RV
-BAC_daily_RV <- rCov(BAC_ret, makeReturns=FALSE) #make daily RV
-index(BAC_daily_RV) <- as.Date(index(BAC_daily_RV)) #to keep only the date, no timestamp -> align all series
+BAC_daily_RV <- rCov(BAC_ret, makeReturns=FALSE) #calculate daily RV
+index(BAC_daily_RV) <- as.Date(index(BAC_daily_RV)) #keep only the date, no timestamp -> align all series
 
 index(BAC_RV1) <- as.Date(index(BAC_RV1)) #drop timestamps for all - only dates left
 index(BAC_RV2) <- as.Date(index(BAC_RV2))
 index(BAC_RV3) <- as.Date(index(BAC_RV3))
 index(BAC_RV4) <- as.Date(index(BAC_RV4))
 index(BAC_RV5) <- as.Date(index(BAC_RV5))
-BAC_RV_sum <- BAC_RV1 + BAC_RV2 + BAC_RV3 + BAC_RV4 + BAC_RV5 
+BAC_RV_sum <- BAC_RV1 + BAC_RV2 + BAC_RV3 + BAC_RV4 + BAC_RV5 #sum intraday RV
 
 
 #MSFT
@@ -214,11 +217,11 @@ plot.zoo(BAC_daily_RV - BAC_RV_sum, main="BAC: Daily RV - Sum of Intraday RV")
 plot.zoo(MSFT_daily_RV - MSFT_RV_sum, main="MSFT: Daily RV - Sum of Intraday RV", col="darkgreen")
 plot.zoo(XOM_daily_RV - XOM_RV_sum, main="XOM: Daily RV - Sum of Intraday RV", col="red")
 
-BAC_pct1 <- BAC_RV1 / BAC_daily_RV * 100
-BAC_pct2 <- BAC_RV2 / BAC_daily_RV * 100
-BAC_pct3 <- BAC_RV3 / BAC_daily_RV * 100
-BAC_pct4 <- BAC_RV4 / BAC_daily_RV * 100
-BAC_pct5 <- BAC_RV5 / BAC_daily_RV * 100
+BAC_pct1 <- BAC_RV1 / BAC_daily_RV * 100 #7:00−9:29
+BAC_pct2 <- BAC_RV2 / BAC_daily_RV * 100 #9:30−10:59
+BAC_pct3 <- BAC_RV3 / BAC_daily_RV * 100 #11:00−14:29
+BAC_pct4 <- BAC_RV4 / BAC_daily_RV * 100 #14:30−15:59
+BAC_pct5 <- BAC_RV5 / BAC_daily_RV * 100 #16:00−18:00
 
 MSFT_pct1 <- MSFT_RV1 / MSFT_daily_RV * 100
 MSFT_pct2 <- MSFT_RV2 / MSFT_daily_RV * 100
@@ -232,9 +235,10 @@ XOM_pct3 <- XOM_RV3 / XOM_daily_RV * 100
 XOM_pct4 <- XOM_RV4 / XOM_daily_RV * 100
 XOM_pct5 <- XOM_RV5 / XOM_daily_RV * 100
 
-options(repr.plot.height=10, repr.plot.width=16)
-par(mfrow=c(2,3))
+options(repr.plot.height=12, repr.plot.width=16)
+par(mfrow=c(2,1))
 
+#BAC line graph
 plot.zoo(BAC_pct1, main="BAC: Intraday RV % share of daily RV over time", ylab="%") #to visualise variation over time, although hard to read
 lines(zoo(BAC_pct2), col="red")
 lines(zoo(BAC_pct3), col="green")
@@ -265,7 +269,7 @@ legend(x="topleft", legend=c("7:00-9:29", "9:30-10:59", "11:00-14:29", "14:30-15
     col=c("black", "red", "green", "blue", "lightblue"), lwd=1, bty="n", horiz=TRUE, text.width=70
 )
 
-#need to merge MSFT pcts first, because pct5 has different number of obs than the rest (754 vs 756)
+#need to merge MSFT pcts first, because pct5 has different number of obs than the rest (754 vs 756) (error regarding alignment otherwise)
 MSFT_pct_merged <- cbind(MSFT_pct1, MSFT_pct2, MSFT_pct3, MSFT_pct4, MSFT_pct5)
 MSFT_pct_df <- as.data.frame(MSFT_pct_merged)
 colnames(MSFT_pct_df) <- c("7:00-9:29", "9:30-10:59", "11:00-14:29", "14:30-15:59", "16:00-18:00")
@@ -294,15 +298,15 @@ boxplot(XOM_pct_df, main="XOM: Intraday RV % share of daily RV", ylab="%",
 
 #We would like to see whether each sub-period has enough price observations to create a return
 
-stocks <- list(BAC=BAC_xts, MSFT=MSFT_xts, XOM=XOM_xts) #list of stock prices
+stocks <- list(BAC=BAC_xts, MSFT=MSFT_xts, XOM=XOM_xts) #list of stock price series
 period_list <- list(c("07:00:00","09:29:00"), c("09:30:00","10:59:00"), #list of intraday periods
                     c("11:00:00","14:29:00"), c("14:30:00","15:59:00"),c("16:00:00","18:00:00"))
 
-for (ticker in names(stocks)){
+for (ticker in names(stocks)){ #for each stock
     for (i in 1:5){ #for each intraday period
         filtered <- filter_hours(stocks[[ticker]], period_list[[i]][1], period_list[[i]][2]) #custom function from earlier - xts subsetting for each intraday period
-        obs_per_day <- table(as.Date(index(filtered))) #count how many observations we have each day
-        single_obs_days <- sum(obs_per_day==1) #count number of days have a single price obs
+        obs_per_day <- table(as.Date(index(filtered))) #count how many observations we have each day in a given sub-period
+        single_obs_days <- sum(obs_per_day==1) #count number of days have a single price obs in a given sub-period
         if (single_obs_days>0) cat(ticker, "period", i, "has", single_obs_days, "days with 1 price obs.\n")
     }
 }
@@ -311,7 +315,7 @@ for (ticker in names(stocks)){
 #create a function which would remove days with insufficient price obs -> can calculate returns
 
 filter_min_obs <- function(data, start, end, min_obs=2){
-    filtered <- filter_hours(data, start, end)
+    filtered <- filter_hours(data, start, end) #xts subset custom func. from earlier
     obs_per_day <- table(as.Date(index(filtered)))
     valid_days <- names(obs_per_day[obs_per_day >= min_obs]) #get the names (the dates) of days satisfying the min obs condition
     filtered[as.Date(index(filtered)) %in% as.Date(valid_days)] #subset 'filtered' to keep only observations from valid_days
@@ -400,7 +404,7 @@ plot.zoo(BAC_daily_RV-BAC_price_RV_sum, main="BAC: Daily RV - Sum of Intraday RV
 plot.zoo(MSFT_daily_RV-MSFT_price_RV_sum, main="MSFT: Daily RV - Sum of Intraday RV (prices)", col="darkgreen")
 plot.zoo(XOM_daily_RV-XOM_price_RV_sum, main="XOM: Daily RV - Sum of Intraday RV (prices)", col="red")
 
-#percentage share of individual intraday RV on total daily RV
+#percentage share of individual subperiod intraday RV on total daily RV
 
 BAC_price_pct1 <- BAC_price_RV1 / BAC_daily_RV * 100
 BAC_price_pct2 <- BAC_price_RV2 / BAC_daily_RV * 100
@@ -513,7 +517,7 @@ BAC_MedRV_JT <- BNSjumpTest(BAC_xts, IVestimator="rMedRVar", IQestimator="rMedRQ
 MSFT_MedRV_JT <- BNSjumpTest(MSFT_xts, IVestimator="rMedRVar", IQestimator="rMedRQuar", makeReturns=TRUE)
 XOM_MedRV_JT <- BNSjumpTest(XOM_xts, IVestimator="rMedRVar", IQestimator="rMedRQuar", makeReturns=TRUE)
 
-#head(BAC_MedRV_JT, 3)
+head(BAC_MedRV_JT, 3)
 
 #create a jump indicator I (1 = signif. jump, 0 = not)
 #BPV
@@ -535,10 +539,11 @@ index(MSFT_MedRV_I) <- as.Date(index(MSFT_MedRV_I))
 index(XOM_MedRV_I) <- as.Date(index(XOM_MedRV_I))
 
 #identify significant jumps
-#BVP
+#BPV
 BAC_BPV_J <- (BAC_daily_RV - BAC_BPV) * BAC_BPV_I #xts of signif jump magnitude or 0s
 MSFT_BPV_J <- (MSFT_daily_RV - MSFT_BPV) * MSFT_BPV_I
 XOM_BPV_J <- (XOM_daily_RV - XOM_BPV) * XOM_BPV_I
+head(BAC_BPV_J)
 
 #MedRV
 BAC_MedRV_J <- (BAC_daily_RV - BAC_MedRV) * BAC_MedRV_I
@@ -546,75 +551,70 @@ MSFT_MedRV_J <- (MSFT_daily_RV - MSFT_MedRV) * MSFT_MedRV_I
 XOM_MedRV_J <- (XOM_daily_RV - XOM_MedRV) * XOM_MedRV_I
 
 
-#Comparison of RVolatility estimates (without jumps)
-options(repr.plot.height=14, repr.plot.width=14)
+#Comparison of RV estimates (without jumps vs with jumps)
+options(repr.plot.height=14, repr.plot.width=20)
+par(mfrow=c(3,2))
+
+# BAC
+plot.zoo(BAC_daily_RV, main="BAC: RV vs BPV vs MedRV (no jumps)", col="blue")
+lines(zoo(BAC_MedRV), col="red")
+lines(zoo(BAC_BPV), col="green")
+legend("top", legend=c("RV", "BPV", "MedRV"), col=c("blue", "green", "red"),
+    lwd=2, bty="n", horiz=TRUE, cex=1.2, text.width=70)
+
+plot.zoo(BAC_daily_RV, main="BAC: RV vs BPV vs MedRV (with jumps)", col="blue")
+lines(zoo(BAC_MedRV + BAC_MedRV_J), col="red")
+lines(zoo(BAC_BPV + BAC_BPV_J), col="green")
+legend("top", legend=c("RV", "BPV", "MedRV"), col=c("blue", "green", "red"),
+    lwd=2, bty="n", horiz=TRUE, cex=1.2, text.width=70)
+
+
+# MSFT
+plot.zoo(MSFT_daily_RV, main="MSFT: RV vs BPV vs MedRV (no jumps)", col="blue")
+lines(zoo(MSFT_MedRV), col="red")
+lines(zoo(MSFT_BPV), col="green")
+legend("top", legend=c("RV", "BPV", "MedRV"), col=c("blue", "green", "red"),
+    lwd=2, bty="n", horiz=TRUE, cex=1.2, text.width=70)
+
+plot.zoo(MSFT_daily_RV, main="MSFT: RV vs BPV vs MedRV (with jumps)", col="blue")
+lines(zoo(MSFT_MedRV + MSFT_MedRV_J), col="red")
+lines(zoo(MSFT_BPV + MSFT_BPV_J), col="green")
+legend("top", legend=c("RV", "BPV", "MedRV"), col=c("blue", "green", "red"),
+    lwd=2, bty="n", horiz=TRUE, cex=1.2, text.width=70)
+
+
+# XOM
+plot.zoo(XOM_daily_RV, main="XOM: RV vs BPV vs MedRV (no jumps)", col="blue")
+lines(zoo(XOM_MedRV), col="red")
+lines(zoo(XOM_BPV), col="green")
+legend("top", legend=c("RV", "BPV", "MedRV"), col=c("blue", "green", "red"),
+    lwd=2, bty="n", horiz=TRUE, cex=1.2, text.width=70)
+
+plot.zoo(XOM_daily_RV, main="XOM: RV vs BPV vs MedRV (with jumps)", col="blue")
+lines(zoo(XOM_MedRV + XOM_MedRV_J), col="red")
+lines(zoo(XOM_BPV + XOM_BPV_J), col="green")
+legend("top", legend=c("RV", "BPV", "MedRV"), col=c("blue", "green", "red"),
+    lwd=2, bty="n", horiz=TRUE, cex=1.2, text.width=70)
+
+#Comparison of the differences: RV - BPV and RV - MedRV
 par(mfrow=c(3,1))
 
-#BAC
-plot.zoo(sqrt(BAC_daily_RV), main="BAC: RVol vs BPVol vs MedRVol", col="blue")
-lines(zoo(sqrt(BAC_BPV)), col="green")
-lines(zoo(sqrt(BAC_MedRV)), col="red")
-legend("top", legend=c("RVol", "BPVol", "MedRVol"), col=c("blue", "green", "red"),
-    lwd=2, bty="n", horiz=TRUE, cex=1.2)
-
-#MSFT
-plot.zoo(sqrt(MSFT_daily_RV), main="MSFT: RVol vs BPVol vs MedRVol", col="blue")
-lines(zoo(sqrt(MSFT_BPV)), col="green")
-lines(zoo(sqrt(MSFT_MedRV)), col="red")
-legend("top", legend=c("RVol", "BPVol", "MedRVol"), col=c("blue", "green", "red"),
-    lwd=2, bty="n", horiz=TRUE, cex=1.2)
-
-
-#XOM
-plot.zoo(sqrt(XOM_daily_RV), main="XOM: RVol vs BPVol vs MedRVol", col="blue")
-lines(zoo(sqrt(XOM_BPV)), col="green")
-lines(zoo(sqrt(XOM_MedRV)), col="red")
-legend("top", legend=c("RVol", "BPVol", "MedRVol"), col=c("blue", "green", "red"),
-    lwd=2, bty="n", horiz=TRUE, cex=1.2)
-
-#Comparison of RVolatility estimates (with jumps)
-par(mfrow=c(3,1))
-#BAC
-plot.zoo(sqrt(BAC_daily_RV), main="BAC: RVol vs BPVol vs MedRVol including jumps", col="blue")
-lines(zoo(sqrt(BAC_BPV + BAC_BPV_J)), col="green")
-lines(zoo(sqrt(BAC_MedRV + BAC_MedRV_J)), col="red")
-legend("top", legend=c("RVol", "BPVol", "MedRVol"), col=c("blue", "green", "red"),
-    lwd=2, bty="n", horiz=TRUE, cex=1.2)
-
-#MSFT
-plot.zoo(sqrt(MSFT_daily_RV), main="MSFT: RVol vs BPVol vs MedRVol including jumps", col="blue")
-lines(zoo(sqrt(MSFT_BPV + MSFT_BPV_J)), col="green")
-lines(zoo(sqrt(MSFT_MedRV + MSFT_MedRV_J)), col="red")
-legend("top", legend=c("RVol", "BPVol", "MedRVol"), col=c("blue", "green", "red"),
-    lwd=2, bty="n", horiz=TRUE, cex=1.2)
-
-
-#XOM
-plot.zoo(sqrt(XOM_daily_RV), main="XOM: RVol vs BPVol vs MedRVol including jumps", col="blue")
-lines(zoo(sqrt(XOM_BPV + XOM_BPV_J)), col="green")
-lines(zoo(sqrt(XOM_MedRV + XOM_BPV_J)), col="red")
-legend("top", legend=c("RVol", "BPVol", "MedRVol"), col=c("blue", "green", "red"),
-    lwd=2, bty="n", horiz=TRUE, cex=1.2)
-
-#Comparison of the differences: RVol - BPVol and RVol - MedVol
-par(mfrow=c(3,1))
-
-plot.zoo(sqrt(BAC_daily_RV) - sqrt(BAC_BPV), main="BAC: RVol - BPV vs RVol - MedRV")
-lines(zoo(sqrt(BAC_daily_RV) - sqrt(BAC_MedRV)), col="red", lwd=1)
-legend("top", legend=c("RVol - BPVol", "RVol - MedRVol"),
+plot.zoo(BAC_daily_RV - BAC_BPV, main="BAC: RV - BPV vs RV - MedRV", ylim=c(-0.003, 0.0025))
+lines(zoo(BAC_daily_RV - BAC_MedRV), col="red", lwd=1)
+legend("top", legend=c("RV - BPV", "RV - MedRV"),
        col=c("black", "red"), lwd=2, bty="n", horiz=TRUE)
 
-plot.zoo(sqrt(MSFT_daily_RV) - sqrt(MSFT_BPV), main="MSFT: RVol - BPV vs RVol - MedRV")
-lines(zoo(sqrt(MSFT_daily_RV) - sqrt(MSFT_MedRV)), col="red", lwd=1)
-legend("top", legend=c("RVol - BPVol", "RVol - MedRVol"),
+plot.zoo(MSFT_daily_RV - MSFT_BPV, main="MSFT: RV - BPV vs RV - MedRV", ylim=c(-0.003, 0.0025))
+lines(zoo(MSFT_daily_RV - MSFT_MedRV), col="red", lwd=1)
+legend("top", legend=c("RV - BPV", "RV - MedRV"),
        col=c("black", "red"), lwd=2, bty="n", horiz=TRUE)
 
-plot.zoo(sqrt(XOM_daily_RV) - sqrt(XOM_BPV), main="XOM: RVol - BPV vs RVol - MedRV")
-lines(zoo(sqrt(XOM_daily_RV) - sqrt(XOM_MedRV)), col="red", lwd=1)
-legend("top", legend=c("RVol - BPVol", "RVol - MedRVol"),
+plot.zoo(XOM_daily_RV - XOM_BPV, main="XOM: RV - BPV vs RV - MedRV", ylim=c(-0.003, 0.0025))
+lines(zoo(XOM_daily_RV - XOM_MedRV), col="red", lwd=1)
+legend("top", legend=c("RV - BPV", "RV - MedRV"),
        col=c("black", "red"), lwd=2, bty="n", horiz=TRUE)
 
-#visualisation of significant jumps
+#visualisation of significant jump variance 
 
 par(mfrow=c(3,1))
 
@@ -633,8 +633,51 @@ lines(zoo(XOM_MedRV_J), col="red", lwd=1)
 legend("top", legend=c("BPV jumps", "MedRV jumps"),
        col=c("black", "red"), lwd=2, bty="n", horiz=TRUE)
 
+#We calculate daily returns by summing intraday log returns
+
+BAC_daily_ret <- xts(unlist( #xts needs a vector
+    lapply(split(BAC_ret, as.Date(index(BAC_ret))), sum)), #split returns per day and sum
+    order.by=unique(as.Date(index(BAC_ret))) #order result by days, not intraday timestamps
+)
+
+MSFT_daily_ret <- xts(
+    unlist(lapply(split(MSFT_ret, as.Date(index(MSFT_ret))), sum)), 
+    order.by=unique(as.Date(index(MSFT_ret)))
+)
+
+XOM_daily_ret <- xts(
+    unlist(lapply(split(XOM_ret, as.Date(index(XOM_ret))), sum)), 
+    order.by=unique(as.Date(index(XOM_ret)))
+)
+
+head(BAC_daily_ret, 3)
+
+#fitting the GARCH models
+garchspec <- ugarchspec(
+    mean.model=list(armaOrder=c(0,0)), 
+    variance.model=list(garchOrder=c(1,1))
+)
+
+BAC_garch <- ugarchfit(garchspec, BAC_daily_ret)
+MSFT_garch <- ugarchfit(garchspec, MSFT_daily_ret)
+XOM_garch <- ugarchfit(garchspec, XOM_daily_ret)
 
 
+#plot daily RVol vs Sigma GARCH
+options(repr.plot.height=10, repr.plot.width=10)
+par(mfrow=c(3,1))
 
+#BAC
+plot.zoo(sqrt(BAC_daily_RV), main="BAC: RVol vs GARCH(1,1) cond. vola", col="black")
+lines(zoo(sigma(BAC_garch)), col="red")
+legend("top", legend=c("RVol", "GARCH(1,1)"), col=c("black", "red"), lwd=1, bty="n", horiz=TRUE)
 
+#MSFT
+plot.zoo(sqrt(MSFT_daily_RV), main="MSFT: RVol vs GARCH(1,1) cond. vola", col="black")
+lines(zoo(sigma(MSFT_garch)), col="red")
+legend("top", legend=c("RVol", "GARCH(1,1)"), col=c("black", "red"), lwd=1, bty="n", horiz=TRUE)
 
+#XOM
+plot.zoo(sqrt(XOM_daily_RV), main="XOM: RVol vs GARCH(1,1) cond. vola", col="black")
+lines(zoo(sigma(XOM_garch)), col="red")
+legend("top", legend=c("RVol", "GARCH(1,1)"), col=c("black", "red"), lwd=1, bty="n", horiz=TRUE)
