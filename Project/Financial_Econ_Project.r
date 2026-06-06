@@ -209,7 +209,7 @@ m5 <- ugarchfit(
 m5
 
 arma_garch_spec <- ugarchspec(
-    variance.mode = list(model='sGARCH', garchOrder = c(1, 1)),
+    variance.model = list(model='sGARCH', garchOrder = c(1, 1)),
     mean.model = list(armaOrder = c(1, 1), include.mean = TRUE)
 )
 m6 <- ugarchfit(arma_garch_spec, data = df$ret, solver = 'hybrid')
@@ -262,3 +262,257 @@ legend("topleft", legend=c("Actual", colnames(fits)),
     col=c("grey", colors),
     lwd=c(2), cex=0.65
 )
+
+w_l <- 750 #window len
+n_for <- nrow(model_df) - w_l #forecast period
+
+forecast_dates <- model_df$date[(w_l + 1):(nrow(model_df))] #vector of dates
+actual_oos <- model_df$RV[(w_l + 1):nrow(model_df)]
+
+#n_for
+#length(forecast_dates)
+#length(actual_oos)
+
+#Expanding window
+#HAR family 
+m1_exp <- sapply(1:n_for, function(x){
+    fit <- lm(RV ~ RV_lag1, data = model_df[1:(w_l + x - 1), ]) 
+    predict(fit, newdata = model_df[w_l + x, ])
+})
+
+m2_exp <- sapply(1:n_for, function(x){
+    fit <- lm(RV ~ RV_lag1 + RV_w + RV_m, data = model_df[1:(w_l + x - 1), ])
+    predict(fit, newdata = model_df[w_l + x, ])
+})
+
+m3_exp <- sapply(1:n_for, function(x){
+    fit <- lm(RV ~ RVp_lag1 + RVn_lag1 + RVp_w + RVn_w + RVp_m + RVn_m, data = model_df[1:(w_l + x - 1), ])
+    predict(fit, newdata = model_df[w_l + x, ])
+})
+
+m4_exp <- sapply(1:n_for, function(x){
+    fit <- lm(
+        RV ~ RVp_lag1 + RVn_lag1 + RVp_w + RVn_w + RVp_m + 
+        RVn_m + RS_lag1 + RS_w + RS_m + RK_lag1 + RK_w + RK_m, 
+        data = model_df[1:(w_l + x - 1), ])
+    predict(fit, newdata = model_df[w_l + x, ])
+})
+
+#GARCH family
+m5_exp <- ugarchroll(real_garch_spec,
+    data = xts(100 * df$ret, order.by = df$date), #scale for convergence
+    n.ahead = 1,
+    forecast.length = n_for,
+    refit.window = 'recursive',
+    window.size = w_l,
+    solver = 'hybrid',
+    refit.every = 1,
+    realizedVol = xts(100 * df$RV, order.by = df$date)
+)
+
+m6_exp <- ugarchroll(arma_garch_spec,
+    data = xts(df$ret, order.by = df$date),
+    n.ahead = 1,
+    forecast.length = n_for,
+    refit.window = 'recursive',
+    window.size = w_l,
+    solver = 'hybrid',
+    refit.every = 1
+)
+
+#Rolling window
+#HAR family 
+m1_roll <- sapply(1:n_for, function(x){
+    fit <- lm(RV ~ RV_lag1, data = model_df[x:(w_l + x - 1), ]) 
+    predict(fit, newdata = model_df[w_l + x, ])
+})
+
+m2_roll <- sapply(1:n_for, function(x){
+    fit <- lm(RV ~ RV_lag1 + RV_w + RV_m, data = model_df[x:(w_l + x - 1), ])
+    predict(fit, newdata = model_df[w_l + x, ])
+})
+
+m3_roll <- sapply(1:n_for, function(x){
+    fit <- lm(RV ~ RVp_lag1 + RVn_lag1 + RVp_w + RVn_w + RVp_m + RVn_m, data = model_df[x:(w_l + x - 1), ])
+    predict(fit, newdata = model_df[w_l + x, ])
+})
+
+m4_roll <- sapply(1:n_for, function(x){
+    fit <- lm(
+        RV ~ RVp_lag1 + RVn_lag1 + RVp_w + RVn_w + RVp_m + 
+        RVn_m + RS_lag1 + RS_w + RS_m + RK_lag1 + RK_w + RK_m, 
+        data = model_df[x:(w_l + x - 1), ])
+    predict(fit, newdata = model_df[w_l + x, ])
+})
+
+m6_roll <- ugarchroll(arma_garch_spec,
+    data = xts(df$ret, order.by = df$date),
+    n.ahead = 1,
+    forecast.length = n_for,
+    refit.window = 'moving',
+    window.size = w_l,
+    solver = 'hybrid',
+    refit.every = 1
+)
+
+# Realized GARCH (manual function) - rugarch does not work (fails to converge)
+#Fit all windows and store results
+m5_roll_fits <- lapply(1:n_for, function(x) {
+    tryCatch(
+        ugarchfit(real_garch_spec,
+            data = xts(1000 * df$ret, order.by = df$date)[(22 + x):(21 + x + w_l)], #offset by 22 to match model_df (using df since ugarchfit needs xts)
+            solver = 'hybrid',
+            realizedVol = xts(1000 * df$RV, order.by = df$date)[(22 + x):(21 + x + w_l)]
+        ),
+        error = function(e) NULL
+    )
+})
+
+#Forecast Realized GARCH
+m5_roll_forecast <- sapply(1:n_for, function(x) {
+    if(is.null(m5_roll_fits[[x]])) return(NA)
+    as.numeric(ugarchforecast(m5_roll_fits[[x]], n.ahead = 1)@forecast$sigmaFor) / 1000
+})
+
+length(m5_roll_forecast)
+
+#Get GARCH forecasts 
+m5_exp_forecast <- m5_exp@forecast$density$Sigma / 100 #re-scale back
+m6_exp_forecast <- m6_exp@forecast$density$Sigma
+
+#m5_roll_forecast excracted from manual func
+m6_roll_forecast <- m6_roll@forecast$density$Sigma
+
+#Put forecasts into matrices
+forecasts_exp <- cbind(m1_exp, m2_exp, m3_exp, m4_exp, m5_exp_forecast, m6_exp_forecast)
+forecasts_roll <- cbind(m1_roll, m2_roll, m3_roll, m4_roll, m5_roll_forecast, m6_roll_forecast)
+
+colnames(forecasts_exp) <- colnames(forecasts_roll) <- c("AR", "HAR", "HAR-RS", "HAR-RS-RK", "RealGARCH", "ARMA-GARCH")
+
+##Actual vs forecast RV
+options(repr.plot.height = 13, repr.plot.width = 24)
+par(mfrow = c(2, 2))
+y_lim <- range(c(actual_oos, forecasts_exp, forecasts_roll))
+
+#Expanding window
+plot(forecast_dates, actual_oos, type = "l", col = "darkgrey", lwd = 1.5,
+    main = "Expanding Window: Forecasts vs Actual RV",
+    xlab = "", ylab = "RV", ylim = y_lim,
+    panel.first = grid()
+)
+
+for (i in 1:6) lines(forecast_dates, forecasts_exp[, i], col = i + 1, lty = 1)
+legend("topright", legend = c("Actual", colnames(forecasts_exp)),
+    col = c("darkgrey", 2:7), lty = 1, cex = 0.6
+)
+
+#Rolling window
+plot(forecast_dates, actual_oos, type = "l", col = "darkgrey", lwd = 1.5,
+    main = "Rolling Window: Forecasts vs Actual RV",
+    xlab = "", ylab = "RV", ylim = y_lim,
+    panel.first = grid()
+)
+
+for (i in 1:6) lines(forecast_dates, forecasts_roll[, i], col = i + 1, lty = 1)
+legend("topright", legend = c("Actual", colnames(forecasts_roll)),
+    col = c("darkgrey", 2:7), lty = 1, cex=0.6, 
+)
+
+
+##Errors plot
+errors_exp <- forecasts_exp - actual_oos
+errors_roll <- forecasts_roll - actual_oos
+
+#Expanding window
+plot(forecast_dates, errors_exp[, 1], type = "l", col = "darkgrey",
+    main = "Expanding Window: Forecast Errors",
+    xlab = "", ylab = "Error", ylim = range(errors_exp, errors_roll),
+    panel.first = grid())
+for (i in 2:6) lines(forecast_dates, errors_exp[, i], col = i + 1)
+legend("topright", legend = colnames(forecasts_exp), col = 2:7, lty = 1, cex = 0.6)
+
+#Rolling window
+plot(forecast_dates, errors_roll[, 1], type = "l", col = "darkgrey",
+    main = "Rolling Window: Forecast Errors",
+    xlab = "", ylab = "Error", ylim = range(errors_exp, errors_roll),
+    panel.first = grid())
+for (i in 2:6) lines(forecast_dates, errors_roll[, i], col = i + 1)
+legend("topright", legend = colnames(forecasts_roll), col = 2:7, lty = 1, cex = 0.6)
+
+which(m5_roll_forecast > 0.05)
+model_df$date[w_l + which(m5_roll_forecast > 0.05)]
+
+#MSE and MAE
+mse <- function(actual, forecast) mean((actual - forecast)^2)
+mae <- function(actual, forecast) mean(abs(actual - forecast))
+
+#Loss matrices
+loss_exp <- apply(forecasts_exp, 2, function(f) c(MSE = mse(actual_oos, f), MAE = mae(actual_oos, f)))
+loss_roll <- apply(forecasts_roll, 2, function(f) c(MSE = mse(actual_oos, f), MAE = mae(actual_oos, f)))
+
+loss_table <- data.frame(
+    Scheme = rep(c("Expanding", "Rolling"), each = 6),
+    Model = rep(colnames(forecasts_exp), 2),
+    MSE = c(loss_exp["MSE", ], loss_roll["MSE", ]),
+    MAE = c(loss_exp["MAE", ], loss_roll["MAE", ])
+) 
+loss_table
+
+##Loss vectors and p-values
+#MSE loss vectors
+mse_loss_exp <- apply(forecasts_exp, 2, function(f) (f - actual_oos)^2)
+mse_loss_roll <- apply(forecasts_roll, 2, function(f) (f - actual_oos)^2)
+
+pairs <- combn(1:6, 2) #all possible combinations
+
+#Expanding window DM test
+dm_pval_exp <- apply(pairs, 2, function(p) #vector of 15 p-vals
+    dm.test(mse_loss_exp[, p[1]], mse_loss_exp[, p[2]],
+        alternative = "two.sided")$p.value #test both directions
+)
+
+#Rolling window
+dm_pval_roll <- apply(pairs, 2, function(p)
+    dm.test(mse_loss_roll[, p[1]], mse_loss_roll[, p[2]],
+        alternative = "two.sided")$p.value
+)
+
+##Organize results into a matrix
+#empty matrices
+models <- colnames(forecasts_exp)
+dm_matrix_exp <- matrix("", 6, 6, dimnames = list(models, models)) #rows = model 1, cols = model 2
+dm_matrix_roll <- matrix("", 6, 6, dimnames = list(models, models))
+
+#assign to upper triangle
+for (k in 1:ncol(pairs)) {
+    dm_matrix_exp[pairs[1, k], pairs[2, k]] <- round(dm_pval_exp[k], 3)
+    dm_matrix_roll[pairs[1, k], pairs[2,k]] <- round(dm_pval_roll[k], 3)
+}
+
+dm_matrix_exp
+dm_matrix_roll
+
+##MZ regressions
+mz_exp <- lapply(1:6, function(i) lm(actual_oos ~ forecasts_exp[, i]))
+names(mz_exp) <- colnames(forecasts_exp)
+
+mz_roll <- lapply(1:6, function(i) lm(actual_oos ~ forecasts_roll[, i]))
+names(mz_roll) <- colnames(forecasts_roll)
+
+#summary table
+mz_table <- function(mz_list){
+    do.call(rbind, lapply(names(mz_list), function(m){
+        coef <- summary(mz_list[[m]])$coefficients
+        data.frame(
+            Model = m,
+            Alpha = round(coef[1, "Estimate"], 4),
+            t_alpha0 = round(coef[1, "t value"], 2),
+            Beta = round(coef[2, "Estimate"], 3),
+            t_beta1 = round((coef[2, "Estimate"] - 1) / coef[2, "Std. Error"], 2), #we want to test against 1, not 0
+            R2 = round(summary(mz_list[[m]])$r.squared, 3)
+        )
+    }))
+}
+
+mz_table(mz_exp)
+mz_table(mz_roll)

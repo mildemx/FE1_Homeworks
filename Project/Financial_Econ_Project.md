@@ -1,7 +1,7 @@
 # Financial Econometrics I - Project
 #### **Authors:** Maxim Milde (`73267075`), Zahid Pashayev (`54520099`)
 
-**Individual contributions**:
+**Note**: RV is provided as Realized Volatility. As such, all models are estimated on that scale, unless specified otherwise.
 
 **AI tool usage**: 
 
@@ -62,7 +62,7 @@ $$RV_t = \beta_0 + \beta_d^{+} RV_{p,t-1} + \beta_d^{-} RV_{n,t-1} + \beta_w^{+}
 
 The daily negative semi-volatility coefficient of around 0.36 is approximately double that of its positive counterpart (0.18), each of which is statistically significant. Both results align with a **leverage-type asymmetry**; large down-side movements generally forecast larger subsequent volatilities relative to corresponding up-side movements. At longer horizons, weekly and monthly terms, `various coefficients are in agreement as far as the signs, however most do not reach statistical significance` the coefficients keep the same sign pattern (negative semivariances having a higher coefficient), although only the monthly negative semivariance reaches statistical significance at the 5% level (the only change in significance after implementation of NW se). Adjusted $R^2$ is around 0.32 and thus shows an improvement on the standard HAR. As such, separation of positive and negative variation adds predictive power.
 
-## Model 4: HAR-Rskew-Rkurt
+## Model 4: HAR-Rskew-Rkurt `i just noticed that the task doesnt specify that this should be with semi volatility - welp...`
 
 We augment the HAR-RS model with realized skewness and realized kurtosis at daily, weekly, and monthly horizons:
 
@@ -173,3 +173,76 @@ The HAR models are hardly distinguishable in the plots (confirmed by the similar
 Since GARCH family models update conditional variance only from returns, they are slower to react to volatility changes. The HAR family use lagged RV directly and as such respond more quickly to changes in RV levels.
 
 It appears that HAR models track the general level of RV better, but underestimate large volatility spikes on consistent basis. ARMA-GARCH introduces a lot of noise (false spikes). Overall, none of the models capture the largest spikes in volatility accurately. Realized GARCH appears to be the more balanced GARCH model. HAR_Rskew_Rkurt obtains the lowest MSE and MAE of all models.
+
+# 3. Forecasts
+
+## Setup
+
+Regarding rolling window Realized GARCH: although forecasts are produced for all windows, the Hessian fails to invert in some subsamples. This results in several abnormal volatility forecast spikes and can therefore be unreliable. The cause is numerical instability inside the rolling windows. The likelihood surface can become too flat for the optimizer to reliably estimate parameter uncertainty.
+
+## Forecast Plots
+
+The general pattern which can be observed from the plots is that all models track RV reasonably well in calm periods. 
+
+The AR(1)-RV model, while being the most parsimonious, it generates volatility forecasts close to the actual ones. A benefit of it is that it does not appear to forecast spurious spikes like ARMA-GARCH or Realized GARCH (in the rolling window scheme).
+
+The HAR family stays consistently close to actual RV observations in both rolling and expanding windows, although the fit in the expanding window scheme is visibly tighter.
+
+We observe that ARMA-GARCH consistently overestimates RV and can forecast sudden spurious spikes (end of 2014) regardless of the estimation window scheme. When actual RV spikes abnormally, ARMA-GARCH underestimates it significantly (second half of 2015). Overall, ARMA-GARCH visibly underperforms the HAR family in both schemes.
+
+Realized GARCH generates forecasts close to actual RV for most of the oos period (especially under the expanding window scheme). As such, in the expanding window scheme, it is a close competitor to the HAR family models. In the rolling window however, due to numerical instability (flat likelihood surface) it produces extreme forecast spikes (2014-01-15 and 2015-12-01), which do not correspond to actual RV shocks. As such, they are purely numerical artifacts rather than viable forecasts.
+
+The expanding window produces more smooth forecasts across all models, while the rolling window can cause erratic volatility forecasts in all models. Since rolling window drops the oldest observation it constantly changes the sample composition - a high volatility observation entering or leaving the sample has a larger effect on the forecast than in the expanding window. Furthermore, the GARCH family appears the most affected by this change in estimation window scheme. Since GARCH models are estimated by MLE, the likelihood function is sensitive to window composition changes, while HAR's OLS is not so affected.
+
+## Loss Functions
+
+**Expanding window**:
+
+Based on both MSE and MAE, HAR-RS-RK is the best model. Due to the inclusion of realized semi-volatility, skewness and kurtosis, the model accounts for the assymetry and heavy-tails of the volatility distribution more precisely that other models. Each step in the HAR "hierarchy" (from m1 to m4) adds additional useful information. This also leads to the monotonically decreasing MSE and MAE from AR -> HAR-RSkew-Kurt.
+
+Real GARCH ranks above AR on MSE but below it on MAE. (the reason for this is hard to identify visually as RealGARCH has a larger error in the expanding window plot and we would therefore expect it to be  penalized harder by MSE).
+
+ARMA-GARCH is by far the worse ranked model. Since it has no direct access to RV and estimates conditional volatilities based solely on returns, this ranking is unsurprising.
+`
+
+**Rolling Window**: 
+
+HAR-RSkew-RKurt still wins on both metrics.
+
+Real GARCH is now the worst performer (based on MSE) due to its instability in the rolling window scheme causing it to forecast extreme values on several occurances.
+
+ARMA-GARCH appears to be the second worst model (on MSE) and ranks higher than Realized GARCH based on MAE. This is the case as Realized GARCH produces smaller errors on most observations, although its several extreme forecasts (numerical instability spikes) lead it to last place on MSE.
+
+Similar to the expanding windows, the HAR family's rankings are as expected since each next model adds additional valuable information to the previous one: HAR-RSkew-RKurt > HAR-RS > HAR > AR (MAE). HAR-RS ranks below HAR on MSE.
+
+**Window scheme comparison**:
+The expanding window dominates rolling for every model except ARMA-GARCH, where rolling appears better on MSE. Real GARCH deteriorates significantly in the rolling window scheme.
+
+## Diebold-Mariano test
+
+The Diebold-Mariano test assesses whether the difference in forecast accuracy between two models is statistically significant. For each pair of models, the test compares their loss series under $H_0$ of equal predictive accuracy:
+
+$$DM = \frac{\bar{d}}{\sqrt{\hat{V}(\bar{d}) / T}} \xrightarrow{d} N(0,1)$$
+
+where $\bar{d} = \frac{1}{T}\sum_{t=1}^T d_t$ is the mean loss differential, $d_t = L(\hat{e}_{1,t}) - L(\hat{e}_{2,t})$ is the difference in loss between model 1 and model 2 at time $t$, and $\hat{V}(\bar{d})$ is a HAC estimator of the variance of $\bar{d}$. With MSE, the loss is: $L(\hat{e}_t) = (\hat{RV}_t - RV_t)^2$.
+
+None of the Diebold-Mariano tests reach significance at the 5% level in either scheme. As such, we cannot conclude that any model statistically outperforms another. Nevertheless, some patterns can be observed: The lowest p-values tend to involve ARMA-GARCH. This observation is consistent with what we have observed so far. Within the HAR family, the models are far from being statistically distinguishable. As such, we cannot conclude that extending beyond the AR(1)-RV model statistically improves forecast accuracy out-of-sample. The results are consistent across both schemes.
+
+## Mincer-Zarnowitz Regression
+
+The goal of the MZ Regression is to test whether a forecast fully and correctly uses all available information with no systematic bias (i.e. it is efficient):
+
+$$RV_t = \alpha + \beta \hat{RV}_t + \varepsilon_t$$
+
+Under $H_0$ of forecast efficiency, $\alpha = 0$ and $\beta = 1$ (unbiased and correctly scaled).
+
+Since OLS tests $H_0: \beta = 0$, we manually compute a t-statistic to test $H_0: \beta = 1$:
+
+$$t = \frac{\hat{\beta} - 1}{SE(\hat{\beta})}$$
+
+**Expanding window**:
+All models reject $\alpha = 0$ at 5%, except HAR-RS-RK and RealGARCH. The results suggest these two are the only unbiased forecasts. All models reject $\beta = 1$ except HAR-RS-RK, meaning it is the only correctly scaled and efficient forecast model in the expanding window. The rest under-predict RV movements as their $\beta < 1$ (underreact to volatility movements). $R^2$ is highest for RealGARCH and HAR-RS-RK and as such are the most informative. ARMA-GARCH has the lowest $R^2$ and the most extreme $\beta$ and $\alpha$ t-stats, making it the worst performer.
+
+**Rolling window**: All models reject both $\alpha = 0$ and $\beta = 1$ - no model is forecast-efficient. All $\alpha$ values are signif. positive (upward biased) and $\beta$ estimates are below 1. In this scheme, RealGARCH ranks the worst (highest bias and lowest scale, most significantly different from 0 and 1 respectively) due to its numerical instability issues. HAR-RS-RK remains the best performing model with lowest bias, highest beta and highest $R^2$. Altogether, all models perform worse in rolling window scheme with the exception of ARMA-GARCH, which performs better. This better performance in the rolling window scheme is somewhat mysterious. It could be attributed to the model dropping out stale observations, which accumulate in the expanding window and can distort estimates over time, nevertheless the model already downweights old observations exponentially, so stale observations should not have much effect anyhow. The improvement could be sampling noise.
+
+# 4. Summary
